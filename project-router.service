@@ -1,0 +1,37 @@
+# systemd-Unit-Vorlage für den Netzwerkbetrieb.
+# Ablegen unter /etc/systemd/system/project-router.service, dann:
+#   systemctl daemon-reload && systemctl enable --now project-router
+
+[Unit]
+Description=project-router — persistente Agent-Sessions
+Documentation=https://github.com/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=router
+Group=router
+WorkingDirectory=/opt/project-router
+ExecStart=/opt/project-router/router -config /etc/project-router/router.yaml
+
+# Das Token gehört nicht in die Unit, sondern in eine Datei mit 0600:
+#   ROUTER_TOKEN=…
+EnvironmentFile=-/etc/project-router/env
+
+# Ein Neustart beendet alle laufenden Agent-Sessions — das ist bewusst so und
+# deshalb kein automatischer Restart bei Fehlern.
+Restart=no
+
+# Der Router startet Prozesse im Kontext seines Users; die Härtung bleibt deshalb
+# bewusst moderat.
+NoNewPrivileges=false
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=false
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,47 @@
+# Beispielkonfiguration für den Netzwerkbetrieb hinter einem VPN.
+# Umgebungsvariablen haben Vorrang vor diesen Werten.
+
+# local    → Bind an Loopback, Token optional
+# networked → Bind an die konfigurierte Adresse, Token verpflichtend
+mode: networked
+
+bind: 0.0.0.0
+port: 7777
+
+# Startbedingung im Modus networked: fehlt das Token, öffnet der Router keinen Port.
+# Besser über die Umgebungsvariable ROUTER_TOKEN setzen, statt es hier abzulegen.
+token: "bitte-ersetzen"
+
+# Basis-URL für die Origin-Prüfung beim WebSocket-Upgrade.
+baseURL: "http://router.homelab:7777"
+
+# Erlaubte Wurzelverzeichnisse. Jeder vom Client übergebene Pfad muss darunter liegen.
+roots:
+  - /srv/projekte
+  - ~/code
+
+# Zustand (Registry und Session-Logs). Default: ~/.local/state/project-router
+stateDir: /var/lib/project-router
+
+# Scrollback pro Session in Bytes (Default 1 MiB).
+bufferBytes: 1048576
+
+# Zusätzliche oder überschriebene Runtimes. Eine bekannte Kennung ersetzt die
+# ausgelieferte Definition vollständig. Dasselbe geht zur Laufzeit in der WebUI
+# unter "Runtimes" — dort wird das Kommando als ganze Zeile eingegeben
+# ("ollama launch claude") und ohne Shell in Kommando plus Argumente zerlegt.
+runtimes:
+  - id: claude-code
+    displayName: Claude Code
+    command: claude
+    defaultArgs: []
+    env:
+      CLAUDE_CODE_DISABLE_TELEMETRY: "1"
+  - id: aider
+    displayName: Aider
+    command: aider
+    defaultArgs: ["--no-auto-commits"]
+  - id: claude-ueber-ollama
+    displayName: Claude über Ollama
+    command: ollama
+    defaultArgs: ["launch", "claude"]
