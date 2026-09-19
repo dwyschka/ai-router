@@ -182,10 +182,28 @@ Die Oberfläche ist auf dem Handy benutzbar, nicht nur lesbar: Übersicht und Di
 brechen auf eine Spalte um, und das Terminal bekommt so viel Fläche wie möglich.
 
 Im Terminal wird **gewischt statt gescrollt**: xterm.js übersetzt Berührungen nicht
-von sich aus, deshalb tut es der Router. Ein Wischen ab etwa sechs Pixeln blättert im
-Verlauf, alles darunter bleibt ein Tippen und setzt wie gewohnt den Fokus — die
-Tastatur geht also weiter auf. Solange der Blick im Verlauf hängt, steht unten rechts
-*↓ Ans Ende*.
+von sich aus, deshalb tut es der Router. Ein Wischen ab etwa sechs Pixeln blättert,
+alles darunter bleibt ein Tippen und setzt wie gewohnt den Fokus — die Tastatur geht
+also weiter auf.
+
+Was „blättern" heißt, entscheidet dabei die Anwendung im PTY, nicht der Router — genau
+wie ein Mausrad am Desktop:
+
+| Zustand der Anwendung | Was die Wischgeste auslöst |
+| --- | --- |
+| liest Mausereignisse (**Claude Code**, OpenCode) | Mausrad-Ereignisse in SGR-Kodierung — die Anwendung scrollt ihre eigene Ansicht |
+| Alternate Screen ohne Maus (`less`, `vim`) | Pfeil hoch/runter |
+| gewöhnliche Ausgabe (Shell, Build-Log) | der Scrollback von xterm.js, dazu *↓ Ans Ende* |
+
+Der erste Fall ist der wichtige und der Grund, warum eine reine Scrollback-Geste nicht
+reicht: **Claude Code läuft im Alternate Screen**, und der hat prinzipbedingt keinen
+Scrollback. Dort gibt es nichts zu schieben — die Anwendung hält den Verlauf selbst
+und erwartet Radereignisse, um darin zu blättern. Wer nur `scrollLines()` aufruft,
+sieht deshalb: nichts.
+
+Eine Wischgeste in einer Anwendung mit Maus-Tracking geht als Eingabe an das PTY.
+Eine offene Rückfrage gilt damit als beantwortet und ihr Hinweis verschwindet —
+die Benachrichtigung ist zu dem Zeitpunkt längst raus.
 
 Die Höhe der Seite rechnet in `dvh` statt `vh`: sonst verschwinden genau die Zeilen
 unter der Adressleiste, die man lesen will.

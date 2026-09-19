@@ -181,6 +181,65 @@ export function TerminalView({
       return term.rows > 0 && hoehe > 0 ? hoehe / term.rows : 17;
     };
 
+    // blaettere macht aus einer Wischstrecke das, was am Desktop das Mausrad täte.
+    // Welcher der drei Wege gilt, entscheidet die Anwendung im PTY, nicht wir:
+    //
+    //  1. Sie liest Mausereignisse (Claude Code tut das) — dann bekommt sie
+    //     Radereignisse und scrollt ihre Ansicht selbst.
+    //  2. Sie füllt den Alternate Screen ohne Maus (less, vim) — dort gibt es
+    //     keinen Scrollback, wohl aber die Erwartung von Pfeiltasten.
+    //  3. Sonst: gewöhnliche Ausgabe, der Scrollback von xterm.js trägt.
+    //
+    // Der alte Weg kannte nur 3. Genau deshalb ließ sich in Claude Code nichts
+    // bewegen: dessen Alternate Screen hat keinen Scrollback, den man schieben
+    // könnte — scrollLines() lief ins Leere.
+    const blaettere = (zeilen: number) => {
+      if (zeilen === 0) return;
+
+      if (term.modes.mouseTrackingMode !== "none") {
+        sendeRad(zeilen);
+        return;
+      }
+      if (term.buffer.active.type === "alternate") {
+        sendePfeile(zeilen);
+        return;
+      }
+      term.scrollLines(zeilen);
+    };
+
+    // radschritt: so viele Zeilen entsprechen einer Raste des Mausrads.
+    const radschritt = 3;
+
+    // sendeRad schickt Radereignisse in SGR-Kodierung (CSI < Taste ; Spalte ; Zeile M).
+    // Wer Maus-Tracking einschaltet, handelt heute immer auch SGR aus; eine
+    // Anwendung, die es nicht kennt, verwirft die Sequenz, statt sie misszudeuten.
+    const sendeRad = (zeilen: number) => {
+      const hoch = zeilen < 0;
+      const rasten = Math.max(1, Math.round(Math.abs(zeilen) / radschritt));
+      // Die Position ist die Bildmitte: für das Rad wertet sie kaum jemand aus,
+      // aber gültig muss sie sein.
+      const spalte = Math.max(1, Math.min(term.cols, Math.ceil(term.cols / 2)));
+      const zeile = Math.max(1, Math.min(term.rows, Math.ceil(term.rows / 2)));
+      const taste = hoch ? 64 : 65;
+      sende(`\x1b[<${taste};${spalte};${zeile}M`.repeat(rasten));
+    };
+
+    // sendePfeile ist der Weg für den Alternate Screen ohne Maus-Tracking — dasselbe,
+    // was ein Terminalemulator dort aus dem Mausrad macht.
+    const sendePfeile = (zeilen: number) => {
+      const hoch = zeilen < 0;
+      // Im Application-Cursor-Keys-Modus erwartet die Anwendung ESC O A statt ESC [ A.
+      const praefix = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
+      sende(`${praefix}${hoch ? "A" : "B"}`.repeat(Math.abs(zeilen)));
+    };
+
+    // sende geht bewusst direkt an den WebSocket, nicht über term.onData: Blättern
+    // ist keine Antwort auf eine Rückfrage und darf deren Hinweis nicht löschen.
+    const sende = (daten: string) => {
+      if (ws?.readyState !== WebSocket.OPEN) return;
+      ws.send(new TextEncoder().encode(daten));
+    };
+
     const beruehrungStart = (event: TouchEvent) => {
       if (event.touches.length !== 1) return;
       letzteY = event.touches[0].clientY;
@@ -204,7 +263,7 @@ export function TerminalView({
       const zeilen = Math.trunc(rest / zeilenhoehe());
       if (zeilen !== 0) {
         rest -= zeilen * zeilenhoehe();
-        term.scrollLines(zeilen);
+        blaettere(zeilen);
       }
     };
 
