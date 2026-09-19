@@ -50,6 +50,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** Info beschreibt die Instanz: Anzeigename und ob die API ein Token verlangt. */
+export interface Info {
+  name: string;
+  requiresToken: boolean;
+}
+
 export interface FsEntry {
   name: string;
   path: string;
@@ -110,9 +116,14 @@ export interface Session {
   endedAt?: string;
   exitCode?: number;
   error?: string;
+  /** Offene Rückfrage des Agenten — leer oder fehlend, solange keine ansteht. */
+  attention?: string;
 }
 
 export const api = {
+  /** /api/info liegt vor der Token-Prüfung: der Name steht schon auf dem Token-Dialog. */
+  info: () => request<Info>("/api/info"),
+
   listDirectories: (path?: string) =>
     request<FsListing>(`/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   getToken,
@@ -7,6 +7,14 @@ import {
   type Runtime,
   type Session,
 } from "./api";
+import {
+  bereiteVor,
+  erlaubnis,
+  frageErlaubnis,
+  melde,
+  setzeTitelmarke,
+  type Erlaubnis,
+} from "./attention";
 import { TokenDialog } from "./TokenDialog";
 import { FileBrowserDialog } from "./FileBrowserDialog";
 import { StartSessionDialog } from "./StartSessionDialog";
@@ -26,8 +34,15 @@ function herkunft(r: Runtime): string {
   }
 }
 
+// startSession liest die Session aus der Adresse: eine Benachrichtigung verlinkt
+// direkt auf die Session, die auf eine Entscheidung wartet.
+function sessionAusAdresse(): string | null {
+  return new URLSearchParams(location.search).get("session");
+}
+
 export function App() {
   const [tokenNoetig, setTokenNoetig] = useState(false);
+  const [name, setName] = useState("project-router");
   const [projekte, setProjekte] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [runtimes, setRuntimes] = useState<Runtime[]>([]);
@@ -35,7 +50,11 @@ export function App() {
   const [fehler, setFehler] = useState<string | null>(null);
   const [browserOffen, setBrowserOffen] = useState(false);
   const [startFuer, setStartFuer] = useState<Project | null>(null);
-  const [offeneSessionId, setOffeneSessionId] = useState<string | null>(null);
+  const [offeneSessionId, setOffeneSessionId] = useState<string | null>(sessionAusAdresse);
+  const [meldeErlaubnis, setMeldeErlaubnis] = useState<Erlaubnis>(erlaubnis);
+  // gemeldet hält fest, für welche Sessions schon eine Meldung rausging — sonst
+  // benachrichtigt jeder Durchlauf der Liste erneut.
+  const gemeldet = useRef<Set<string>>(new Set());
 
   // Die offene Session wird aus der Liste gelesen, damit Statuswechsel und das
   // Wegfallen einer Session direkt durchschlagen.
@@ -67,12 +86,43 @@ export function App() {
     void laden();
   }, [laden]);
 
+  // Der Name der Instanz steht in der Konfiguration des Routers; /api/info liegt
+  // vor der Token-Prüfung und ist deshalb auch auf dem Token-Dialog schon da.
+  useEffect(() => {
+    api
+      .info()
+      .then((info) => setName(info.name))
+      .catch(() => undefined);
+  }, []);
+
+  // Den Service Worker früh registrieren: ohne ihn zeigt Chrome auf Android keine
+  // Benachrichtigung an, und bis er bereit ist, vergeht ein Moment.
+  useEffect(() => {
+    void bereiteVor();
+  }, []);
+
   // Übersicht und Session-Leiste halten sich aktuell.
   useEffect(() => {
     if (tokenNoetig) return;
     const timer = window.setInterval(() => void laden(), 4000);
     return () => window.clearInterval(timer);
   }, [laden, tokenNoetig]);
+
+  // Rückfragen, die nicht gerade offen auf dem Schirm stehen, werden gemeldet: das
+  // Banner der Terminalansicht sieht nur, wer ohnehin hinschaut.
+  useEffect(() => {
+    const offen = sessions.filter((s) => s.attention && s.status === "running");
+    for (const s of offen) {
+      if (gemeldet.current.has(s.id) || s.id === offeneSessionId) continue;
+      gemeldet.current.add(s.id);
+      melde(`${s.projectName ?? s.projectId} wartet`, s.attention!, s.id);
+    }
+    // Beantwortete Rückfragen dürfen später wieder melden.
+    for (const id of [...gemeldet.current]) {
+      if (!offen.some((s) => s.id === id)) gemeldet.current.delete(id);
+    }
+    setzeTitelmarke(name, offen.length);
+  }, [sessions, offeneSessionId, name]);
 
   // Tastaturkürzel zum Wechseln: Ctrl+Alt+1…9 springt direkt, Ctrl+Alt+←/→ blättert.
   // Die Kürzel laufen in der Capture-Phase, damit das Terminal sie nicht vorher
@@ -139,7 +189,7 @@ export function App() {
   }
 
   if (tokenNoetig) {
-    return <TokenDialog onDone={() => void laden()} />;
+    return <TokenDialog routerName={name} onDone={() => void laden()} />;
   }
 
   if (offeneSession) {
@@ -153,6 +203,7 @@ export function App() {
         <TerminalView
           key={`${offeneSession.id}:${offeneSession.startedAt}`}
           session={offeneSession}
+          routerName={name}
           onRestart={() => void oeffneSession(offeneSession)}
           onBack={() => {
             setOffeneSessionId(null);
@@ -167,9 +218,24 @@ export function App() {
     <div className="app">
       <header className="app-header">
         <div>
-          <h1>project-router</h1>
+          <h1>{name}</h1>
           <div className="sub">Agent-Sessions laufen serverseitig weiter — der Browser hängt sich nur an.</div>
         </div>
+        {meldeErlaubnis === "offen" && (
+          <button
+            onClick={() => {
+              void frageErlaubnis().then(setMeldeErlaubnis);
+            }}
+            title="Meldet, wenn ein Agent auf eine Entscheidung wartet"
+          >
+            Benachrichtigungen erlauben
+          </button>
+        )}
+        {meldeErlaubnis === "unsicherer-kontext" && (
+          <span className="badge warnung" title={`Der Browser erlaubt Benachrichtigungen nur über HTTPS oder auf localhost — diese Seite läuft über ${location.protocol}//. Bis dahin meldet sich ${name} hier in der Oberfläche, und per Webhook auch außerhalb.`}>
+            Benachrichtigungen brauchen HTTPS
+          </span>
+        )}
         {getToken() && (
           <button
             onClick={() => {
@@ -233,6 +299,11 @@ export function App() {
                   {s.exitCode === undefined ? "" : ` · Exit-Code ${s.exitCode}`}
                 </div>
               </div>
+              {s.attention && (
+                <span className="badge attention-badge" title={s.attention}>
+                  wartet auf Entscheidung
+                </span>
+              )}
               <span className={`badge ${s.status}`}>{s.status}</span>
               <button onClick={() => void oeffneSession(s)}>
                 {s.status === "running" ? "Öffnen" : "Neu starten"}

@@ -57,11 +57,38 @@ func NewServer(opts Options) *Server {
 	return s
 }
 
-// Routes liefert den API-Router. Die Auth-Middleware sitzt davor, sodass kein Handler
-// ohne gültiges Token läuft.
+// Routes liefert den API-Router. Bis auf /info sitzt die Auth-Middleware vor jedem
+// Handler, sodass keiner ohne gültiges Token läuft.
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(s.auth.Middleware)
+	// /info steht bewusst vor der Auth-Middleware: die Oberfläche braucht den Namen
+	// dieser Instanz schon auf dem Token-Dialog, und ein Anzeigename ist kein
+	// Geheimnis. Alles Weitere liegt dahinter.
+	r.Get("/info", s.handleInfo)
+
+	r.Group(func(r chi.Router) {
+		r.Use(s.auth.Middleware)
+		s.privateRoutes(r)
+	})
+	return r
+}
+
+// info beschreibt die Instanz für die Oberfläche.
+type info struct {
+	Name string `json:"name"`
+	// RequiresToken meldet, ob die API überhaupt ein Token verlangt.
+	RequiresToken bool `json:"requiresToken"`
+}
+
+func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
+	name := s.cfg.Name
+	if name == "" {
+		name = config.DefaultName
+	}
+	writeJSON(w, http.StatusOK, info{Name: name, RequiresToken: s.cfg.AuthToken() != ""})
+}
+
+func (s *Server) privateRoutes(r chi.Router) {
 	r.Get("/fs", s.handleFS)
 	r.Get("/projects", s.handleListProjects)
 	r.Post("/projects", s.handleCreateProject)
@@ -75,7 +102,6 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/sessions/{id}/restart", s.handleRestartSession)
 	r.Delete("/sessions/{id}", s.handleDeleteSession)
 	r.Get("/sessions/{id}/attach", s.handleAttach)
-	return r
 }
 
 func (s *Server) handleListRuntimes(w http.ResponseWriter, _ *http.Request) {

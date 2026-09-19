@@ -38,6 +38,9 @@ type View struct {
 	EndedAt     *time.Time          `json:"endedAt,omitempty"`
 	ExitCode    *int                `json:"exitCode,omitempty"`
 	Error       string              `json:"error,omitempty"`
+	// Attention ist die offene Rückfrage dieser Session; leer, solange keine ansteht.
+	// Sie wird nicht persistiert: eine Rückfrage überlebt den Prozess nicht.
+	Attention string `json:"attention,omitempty"`
 }
 
 // Manager startet Sessions und hält die laufenden im Speicher.
@@ -47,6 +50,8 @@ type Manager struct {
 	runtimes *runtime.Catalog
 	bufBytes int
 	grace    time.Duration
+	// watch erzeugt den Beobachter für Rückfragen; nil heißt: keine Erkennung.
+	watch WatchFunc
 
 	mu     sync.RWMutex
 	active map[string]*Session
@@ -68,6 +73,10 @@ func NewManager(st store.Store, reg *projects.Registry, cat *runtime.Catalog, bu
 
 // SetGrace setzt die Karenzzeit (für Tests).
 func (m *Manager) SetGrace(d time.Duration) { m.grace = d }
+
+// SetWatch hinterlegt die Erkennung von Rückfragen. Ohne Aufruf bleibt sie aus.
+// Gilt ab der nächsten gestarteten Session.
+func (m *Manager) SetWatch(fn WatchFunc) { m.watch = fn }
 
 // StartRequest beschreibt den Start einer Session.
 type StartRequest struct {
@@ -111,6 +120,13 @@ func (m *Manager) Start(req StartRequest) (View, error) {
 		BufferBytes: m.bufBytes,
 		LogPath:     m.store.SessionLogPath(id),
 		Persist:     m.persist,
+		Watch:       m.watch,
+		Meta: WatchMeta{
+			SessionID:   id,
+			ProjectID:   project.ID,
+			ProjectName: project.Name,
+			RuntimeID:   entry.ID,
+		},
 	})
 
 	m.mu.Lock()
@@ -190,6 +206,11 @@ func (m *Manager) viewOf(meta store.Session) View {
 	}
 	if p, err := m.projects.Get(meta.ProjectID); err == nil {
 		v.ProjectName = p.Name
+	}
+	// Die offene Rückfrage steht nur in der laufenden Session, nicht im Store —
+	// deshalb kommt sie hier dazu, damit auch die Übersicht sie zeigen kann.
+	if sess, ok := m.Get(meta.ID); ok {
+		v.Attention = sess.Attention()
 	}
 	return v
 }

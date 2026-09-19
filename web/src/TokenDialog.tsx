@@ -2,7 +2,7 @@ import { useState } from "react";
 import { setToken } from "./api";
 
 // TokenDialog ist der Einstieg, wenn der Router ein Token verlangt.
-export function TokenDialog({ onDone }: { onDone: () => void }) {
+export function TokenDialog({ routerName, onDone }: { routerName: string; onDone: () => void }) {
   const [value, setValue] = useState("");
 
   return (
@@ -15,7 +15,7 @@ export function TokenDialog({ onDone }: { onDone: () => void }) {
           onDone();
         }}
       >
-        <header>Token benötigt</header>
+        <header>{routerName}: Token benötigt</header>
         <div className="body">
           <p className="muted">
             Der Router verlangt ein Token. Es wird im Browser abgelegt und bei jedem Request

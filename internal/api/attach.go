@@ -175,6 +175,13 @@ func writePump(ctx context.Context, c *conn, sub *session.Subscription) {
 				Status:  string(frame.Status),
 				Message: frame.Message,
 			})
+		case session.FrameAttention:
+			// Eine leere Message nimmt die Meldung zurück; der Client löscht dann
+			// seinen Hinweis.
+			_ = c.writeJSON(ctx, wsMessage{
+				Type:    string(session.FrameAttention),
+				Message: frame.Message,
+			})
 		}
 	}
 

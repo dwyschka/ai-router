@@ -1,6 +1,11 @@
 # Beispielkonfiguration für den Netzwerkbetrieb hinter einem VPN.
 # Umgebungsvariablen haben Vorrang vor diesen Werten.
 
+# Anzeigename dieser Instanz: Überschrift und Fenstertitel der WebUI, Startmeldung
+# und Absender der Benachrichtigungen. Ohne Angabe: "project-router".
+# Entspricht der Umgebungsvariable ROUTER_NAME.
+name: Homelab-Router
+
 # local    → Bind an Loopback, Token optional
 # networked → Bind an die konfigurierte Adresse, Token verpflichtend
 mode: networked
@@ -11,6 +16,13 @@ port: 7777
 # Startbedingung im Modus networked: fehlt das Token, öffnet der Router keinen Port.
 # Besser über die Umgebungsvariable ROUTER_TOKEN setzen, statt es hier abzulegen.
 token: "bitte-ersetzen"
+
+# Token-Prüfung ganz abschalten — auch im Modus networked. Dann kommt jeder Request
+# ohne Authentifizierung durch, und wer die Bind-Adresse erreicht, kann Prozesse im
+# Kontext des Router-Users starten. Nur in einem Netz, dem du vertraust (VPN, Loopback).
+# Ein gesetztes 'token' wird dabei ignoriert.
+# Entspricht der Umgebungsvariable ROUTER_DISABLE_AUTH=1.
+disableAuth: false
 
 # Basis-URL für die Origin-Prüfung beim WebSocket-Upgrade.
 baseURL: "http://router.homelab:7777"
@@ -45,3 +57,43 @@ runtimes:
     displayName: Claude über Ollama
     command: ollama
     defaultArgs: ["launch", "claude"]
+
+# Rückfragen melden: wartet Claude Code oder OpenCode auf eine Entscheidung, soll das
+# nicht erst beim nächsten Blick in den Browser auffallen.
+notify:
+  # Voreingestellt an. Abgeschaltet erkennt der Router keine Rückfragen mehr.
+  # Entspricht der Umgebungsvariable ROUTER_NOTIFY.
+  enabled: true
+
+  # Erkannt wird zweistufig: ein Muster in der Ausgabe *und* anschließende Stille.
+  # Ein arbeitender Agent schreibt laufend weiter; ein wartender nicht. Wer viele
+  # Fehlalarme sieht, dreht diese Spanne hoch.
+  # Entspricht der Umgebungsvariable ROUTER_NOTIFY_IDLE_AFTER.
+  idleAfter: 4s
+
+  # Zusätzliche Muster (RE2, Groß-/Kleinschreibung egal). Die eingebauten decken die
+  # üblichen Nachfragen von Claude Code und OpenCode ab.
+  patterns:
+    - "braucht deine Freigabe"
+
+  # replacePatterns: true ersetzt die eingebauten Muster durch die obigen, statt sie
+  # zu ergänzen. Dann muss mindestens ein eigenes Muster dastehen.
+  replacePatterns: false
+
+  # Ohne webhook.url bleibt die Meldung in der WebUI (Banner, Titelmarke, wenn der
+  # Browser es zulässt auch eine Systembenachrichtigung). Aufs Handy kommt sie
+  # verlässlich nur über den Webhook — ntfy, Gotify, ein Chat-Webhook, Home Assistant.
+  webhook:
+    # Entspricht der Umgebungsvariable ROUTER_NOTIFY_WEBHOOK.
+    url: https://ntfy.sh/mein-privates-topic
+    method: POST
+    # Ohne Template: bei einem JSON-Content-Type das vollständige Ereignis als JSON,
+    # sonst eine lesbare Zeile — das ist die Form, die ntfy direkt anzeigt.
+    contentType: text/plain
+    headers:
+      Title: Agent wartet
+      Priority: high
+    # Eigener Body als Go-Template. Verfügbar sind .Router, .SessionID, .ProjectID,
+    # .ProjectName, .RuntimeID, .Message, .URL und .Time.
+    # template: "{{.ProjectName}} ({{.RuntimeID}}) wartet: {{.Message}}\n{{.URL}}"
+    timeout: 10s

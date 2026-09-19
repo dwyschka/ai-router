@@ -89,7 +89,9 @@ input, select {
 .browser-entry { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; }
 .browser-current { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); margin-bottom: 10px; word-break: break-all; }
 
-.app.terminal-page { display: flex; flex-direction: column; height: 100vh; padding-bottom: 20px; }
+/* 100dvh statt 100vh: auf dem Handy wächst und schrumpft die Adressleiste, und mit
+   100vh ragt das Terminal unter sie — genau um die Zeilen, die man lesen will. */
+.app.terminal-page { display: flex; flex-direction: column; height: 100vh; height: 100dvh; padding-bottom: 20px; }
 .terminal-view { display: flex; flex-direction: column; flex: 1; min-height: 0; height: calc(100vh - 48px); }
 .app.terminal-page .terminal-view { height: auto; }
 
@@ -112,13 +114,77 @@ input, select {
 .switcher .dot.running { background: var(--ok); }
 .switcher .dot.failed { background: var(--error); }
 .switcher-hint { color: var(--muted); font-size: 12px; margin-left: auto; align-self: center; }
-.terminal-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.switcher-tab.wartet { border-color: color-mix(in srgb, var(--warn) 60%, transparent); }
+.switcher .dot.wartet { background: var(--warn); }
+.terminal-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.terminal-wrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .terminal-host { flex: 1; min-height: 0; background: #000; border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
 .terminal-host .xterm { height: 100%; }
+/* Der Viewport von xterm scrollt auf dem Handy nicht von selbst — die Geste wird in
+   TerminalView übersetzt. overscroll-behavior hält die Seite dabei still. */
+.terminal-host .xterm-viewport { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .notice { font-size: 12px; color: var(--warn); }
+
+/* Sprung ans Ende: erscheint nur, solange der Blick im Verlauf hängt. */
+.zum-ende {
+  position: absolute; right: 16px; bottom: 16px; z-index: 5;
+  background: var(--panel-hover); border-color: var(--accent); color: var(--text);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); opacity: 0.94;
+}
+
+/* Rückfrage: der Agent wartet auf eine Entscheidung. */
+.attention {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  padding: 10px 14px; border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  color: var(--text); font-size: 13px;
+}
+.attention em { color: var(--warn); font-style: normal; }
+.attention .grow { flex: 1; min-width: 0; }
+.attention-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: 0 0 auto;
+  animation: pulsieren 1.6s ease-in-out infinite;
+}
+.badge.warnung { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.badge.attention-badge {
+  color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+}
+@keyframes pulsieren {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .attention-dot { animation: none; }
+}
 
 textarea {
   font: inherit; color: var(--text); background: #0e1116;
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; width: 100%; resize: vertical;
 }
 .dialog code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0e1116; padding: 0 4px; border-radius: 4px; }
+
+/* Handy: die Übersicht ist eine Spalte, nicht eine gequetschte Zeile — und die
+   Terminalansicht gibt dem Terminal so viel Fläche wie möglich. */
+@media (max-width: 640px) {
+  .app { padding: 14px 12px 28px; }
+  .app-header { flex-direction: column; align-items: stretch; gap: 10px; margin-bottom: 18px; }
+
+  .row { flex-wrap: wrap; gap: 8px 10px; padding: 12px; }
+  .row .grow { flex-basis: 100%; }
+  .row button { flex: 1 1 auto; min-height: 40px; }
+
+  .section-head { flex-wrap: wrap; gap: 8px; }
+  .backdrop { padding: 0; align-items: flex-end; }
+  .dialog { width: 100%; max-height: 92vh; border-radius: 12px 12px 0 0; }
+
+  .app.terminal-page { padding: 8px 8px 8px; }
+  .terminal-head { gap: 8px; margin-bottom: 8px; }
+  .terminal-head button { min-height: 36px; }
+  .terminal-head .grow { flex-basis: 100%; order: -1; }
+  .terminal-host { border-radius: 8px; padding: 4px; }
+  .switcher { padding-bottom: 8px; }
+  .switcher-hint { display: none; }
+  .attention { flex-wrap: wrap; }
+}

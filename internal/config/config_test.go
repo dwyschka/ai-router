@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func noEnv(string) string { return "" }
@@ -142,5 +143,324 @@ func TestRootsAusEnv(t *testing.T) {
 	}
 	if len(cfg.Roots) != 2 {
 		t.Fatalf("Roots = %v, erwartet zwei Einträge", cfg.Roots)
+	}
+}
+
+func TestDisableAuthErlaubtNetworkedOhneToken(t *testing.T) {
+	path := writeConfig(t, "mode: networked\nbind: 0.0.0.0\ndisableAuth: true\nroots:\n  - /tmp\n")
+	cfg, err := Load(path, noEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.DisableAuth {
+		t.Fatal("disableAuth wurde nicht übernommen")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if cfg.AuthToken() != "" {
+		t.Errorf("AuthToken = %q, erwartet leer", cfg.AuthToken())
+	}
+}
+
+func TestDisableAuthAusEnv(t *testing.T) {
+	path := writeConfig(t, "mode: networked\nroots:\n  - /tmp\n")
+	for _, wert := range []string{"1", "true", "yes", "on"} {
+		env := func(k string) string {
+			if k == "ROUTER_DISABLE_AUTH" {
+				return wert
+			}
+			return ""
+		}
+		cfg, err := Load(path, env)
+		if err != nil {
+			t.Fatalf("%s: %v", wert, err)
+		}
+		if !cfg.DisableAuth {
+			t.Errorf("ROUTER_DISABLE_AUTH=%s wurde nicht übernommen", wert)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%s: Validate: %v", wert, err)
+		}
+	}
+}
+
+func TestDisableAuthAusEnvAbschaltbar(t *testing.T) {
+	// Die Datei schaltet ab, die Umgebung schaltet wieder ein — Env hat Vorrang.
+	path := writeConfig(t, "mode: networked\ndisableAuth: true\nroots:\n  - /tmp\n")
+	env := func(k string) string {
+		if k == "ROUTER_DISABLE_AUTH" {
+			return "false"
+		}
+		return ""
+	}
+	cfg, err := Load(path, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DisableAuth {
+		t.Fatal("ROUTER_DISABLE_AUTH=false sollte die Datei überstimmen")
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("ohne Token und ohne disableAuth muss der Start abbrechen")
+	}
+}
+
+func TestDisableAuthUnbrauchbarerWert(t *testing.T) {
+	env := func(k string) string {
+		if k == "ROUTER_DISABLE_AUTH" {
+			return "vielleicht"
+		}
+		return ""
+	}
+	if _, err := Load("", env); err == nil {
+		t.Fatal("erwartet Fehler bei unbrauchbarem Wahrheitswert")
+	}
+}
+
+func TestAuthTokenOhneDisableAuth(t *testing.T) {
+	cfg := Defaults()
+	cfg.Token = "geheim"
+	if cfg.AuthToken() != "geheim" {
+		t.Errorf("AuthToken = %q", cfg.AuthToken())
+	}
+}
+
+func TestWarnungen(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      func() Config
+		enthaelt string
+		leerwenn bool
+	}{
+		{
+			name: "networked ohne Token-Prüfung",
+			cfg: func() Config {
+				c := Defaults()
+				c.Mode = ModeNetworked
+				c.Bind = "0.0.0.0"
+				c.DisableAuth = true
+				return c
+			},
+			enthaelt: "abgeschaltet",
+		},
+		{
+			name: "Token wird ignoriert",
+			cfg: func() Config {
+				c := Defaults()
+				c.DisableAuth = true
+				c.Token = "geheim"
+				return c
+			},
+			enthaelt: "ignoriert",
+		},
+		{
+			name: "local ohne Token",
+			cfg: func() Config {
+				return Defaults()
+			},
+			enthaelt: "ohne Authentifizierung",
+		},
+		{
+			name: "Token gesetzt",
+			cfg: func() Config {
+				c := Defaults()
+				c.Token = "geheim"
+				return c
+			},
+			leerwenn: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			warnungen := tc.cfg().Warnings()
+			if tc.leerwenn {
+				if len(warnungen) != 0 {
+					t.Fatalf("Warnungen = %v, erwartet keine", warnungen)
+				}
+				return
+			}
+			gefunden := false
+			for _, w := range warnungen {
+				if strings.Contains(w, tc.enthaelt) {
+					gefunden = true
+				}
+			}
+			if !gefunden {
+				t.Errorf("Warnungen = %v, erwartet Hinweis mit %q", warnungen, tc.enthaelt)
+			}
+		})
+	}
+}
+
+func TestNameAusDatei(t *testing.T) {
+	path := writeConfig(t, "name: Homelab-Router\nroots:\n  - /tmp\n")
+	cfg, err := Load(path, noEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Name != "Homelab-Router" {
+		t.Errorf("Name = %q, erwartet den konfigurierten Namen", cfg.Name)
+	}
+}
+
+func TestNameDefaultUndEnv(t *testing.T) {
+	cfg, err := Load("", noEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Name != DefaultName {
+		t.Errorf("Name = %q, erwartet %q", cfg.Name, DefaultName)
+	}
+
+	// Ein leerer Name in der Datei fällt auf den Default zurück, statt eine
+	// namenlose Überschrift zu erzeugen.
+	path := writeConfig(t, "name: \"   \"\nroots:\n  - /tmp\n")
+	cfg, err = Load(path, noEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Name != DefaultName {
+		t.Errorf("Name = %q, erwartet den Default bei leerer Angabe", cfg.Name)
+	}
+
+	env := func(k string) string {
+		if k == "ROUTER_NAME" {
+			return "aus-der-Umgebung"
+		}
+		return ""
+	}
+	cfg, err = Load(path, env)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Name != "aus-der-Umgebung" {
+		t.Errorf("Name = %q, erwartet den Wert aus ROUTER_NAME", cfg.Name)
+	}
+}
+
+func TestNotifyDefaults(t *testing.T) {
+	cfg, err := Load("", noEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Notify.Enabled {
+		t.Error("Notify.Enabled = false, erwartet: Erkennung ist voreingestellt an")
+	}
+	if cfg.Notify.IdleAfter.Duration() != 4*time.Second {
+		t.Errorf("IdleAfter = %s, erwartet 4s", cfg.Notify.IdleAfter)
+	}
+	if cfg.Notify.Webhook.Configured() {
+		t.Error("ohne Angabe darf kein Webhook konfiguriert sein")
+	}
+	if cfg.Notify.Webhook.Method != "POST" {
+		t.Errorf("Methode = %q, erwartet POST", cfg.Notify.Webhook.Method)
+	}
+}
+
+func TestNotifyAusDatei(t *testing.T) {
+	path := writeConfig(t, `roots:
+  - /tmp
+notify:
+  enabled: true
+  idleAfter: 90s
+  patterns:
+    - "braucht deine Freigabe"
+  webhook:
+    url: https://ntfy.sh/mein-topic
+    contentType: text/plain
+    headers:
+      Title: Router
+`)
+	cfg, err := Load(path, noEnv)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if cfg.Notify.IdleAfter.Duration() != 90*time.Second {
+		t.Errorf("IdleAfter = %s, erwartet 90s", cfg.Notify.IdleAfter)
+	}
+	if cfg.Notify.Webhook.URL != "https://ntfy.sh/mein-topic" {
+		t.Errorf("Webhook-URL = %q", cfg.Notify.Webhook.URL)
+	}
+	if cfg.Notify.Webhook.ContentType != "text/plain" {
+		t.Errorf("ContentType = %q, erwartet text/plain", cfg.Notify.Webhook.ContentType)
+	}
+	if cfg.Notify.Webhook.Headers["Title"] != "Router" {
+		t.Errorf("Header Title = %q", cfg.Notify.Webhook.Headers["Title"])
+	}
+	if len(cfg.Notify.Patterns) != 1 {
+		t.Errorf("Patterns = %v, erwartet genau eines", cfg.Notify.Patterns)
+	}
+}
+
+func TestNotifyEnvUeberschreibtDatei(t *testing.T) {
+	path := writeConfig(t, "roots:\n  - /tmp\nnotify:\n  webhook:\n    url: https://alt.example/hook\n")
+	env := func(k string) string {
+		switch k {
+		case "ROUTER_NOTIFY_WEBHOOK":
+			return "https://neu.example/hook"
+		case "ROUTER_NOTIFY_IDLE_AFTER":
+			return "12s"
+		}
+		return ""
+	}
+	cfg, err := Load(path, env)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Notify.Webhook.URL != "https://neu.example/hook" {
+		t.Errorf("Webhook-URL = %q, erwartet den Wert aus der Umgebung", cfg.Notify.Webhook.URL)
+	}
+	if cfg.Notify.IdleAfter.Duration() != 12*time.Second {
+		t.Errorf("IdleAfter = %s, erwartet 12s", cfg.Notify.IdleAfter)
+	}
+}
+
+func TestNotifyAbschaltenPerEnv(t *testing.T) {
+	env := func(k string) string {
+		if k == "ROUTER_NOTIFY" {
+			return "0"
+		}
+		return ""
+	}
+	cfg, err := Load("", env)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Notify.Enabled {
+		t.Error("Notify.Enabled = true, erwartet abgeschaltet über ROUTER_NOTIFY=0")
+	}
+}
+
+func TestUnlesbareZeitspanneMeldetFehler(t *testing.T) {
+	path := writeConfig(t, "roots:\n  - /tmp\nnotify:\n  idleAfter: bald\n")
+	if _, err := Load(path, noEnv); err == nil {
+		t.Fatal("erwartet ein Fehler für eine unlesbare Zeitspanne")
+	}
+}
+
+func TestNotifyValidierung(t *testing.T) {
+	faelle := []struct {
+		name string
+		yaml string
+	}{
+		{name: "kaputtes Muster", yaml: "roots:\n  - /tmp\nnotify:\n  patterns:\n    - \"(\"\n"},
+		{name: "Webhook ohne Schema", yaml: "roots:\n  - /tmp\nnotify:\n  webhook:\n    url: ntfy.sh/topic\n"},
+		{name: "fremdes Schema", yaml: "roots:\n  - /tmp\nnotify:\n  webhook:\n    url: ftp://example.org/hook\n"},
+		{name: "ersetzen ohne Muster", yaml: "roots:\n  - /tmp\nnotify:\n  replacePatterns: true\n"},
+	}
+	for _, f := range faelle {
+		t.Run(f.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, f.yaml), noEnv)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("erwartet ein Validierungsfehler")
+			}
+		})
 	}
 }

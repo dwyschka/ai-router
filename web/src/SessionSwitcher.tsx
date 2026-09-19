@@ -20,13 +20,15 @@ export function SessionSwitcher({
           key={s.id}
           role="tab"
           aria-selected={s.id === activeId}
-          className={`switcher-tab ${s.id === activeId ? "active" : ""}`}
+          className={`switcher-tab ${s.id === activeId ? "active" : ""} ${
+            s.attention ? "wartet" : ""
+          }`}
           onClick={() => onSelect(s)}
           title={`${s.projectName ?? s.projectId} · ${s.runtimeId}${
             index < 9 ? ` — Ctrl+Alt+${index + 1}` : ""
-          }`}
+          }${s.attention ? ` — wartet: ${s.attention}` : ""}`}
         >
-          <span className={`dot ${s.status}`} aria-hidden />
+          <span className={`dot ${s.attention ? "wartet" : s.status}`} aria-hidden />
           <span className="switcher-name">{s.projectName ?? s.projectId}</span>
           <span className="switcher-runtime">{s.runtimeId}</span>
           {index < 9 && <span className="switcher-key">{index + 1}</span>}

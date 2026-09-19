@@ -33,7 +33,37 @@ const (
 	FrameStatus    FrameKind = "status"
 	FrameTruncated FrameKind = "truncated"
 	FrameExit      FrameKind = "exit"
+	// FrameAttention meldet, dass der Agent auf eine Entscheidung wartet. Eine
+	// leere Message hebt die Meldung wieder auf.
+	FrameAttention FrameKind = "attention"
 )
+
+// Watcher beobachtet die Ausgabe einer Session, um Rückfragen zu erkennen. Die
+// Implementierung liegt außerhalb dieses Pakets; hier steht nur die Naht.
+//
+// Observe läuft im heißen Pfad unter dem Session-Lock und darf deshalb weder
+// blockieren noch den Meldeweg synchron auslösen.
+type Watcher interface {
+	// Observe bekommt jeden Ausgabe-Chunk der Session.
+	Observe(chunk []byte)
+	// Input meldet, dass der Nutzer etwas geschickt hat — eine offene Rückfrage
+	// gilt damit als beantwortet.
+	Input()
+	// Close gibt den Beobachter am Ende der Session frei.
+	Close()
+}
+
+// WatchMeta benennt die Session gegenüber dem Beobachter.
+type WatchMeta struct {
+	SessionID   string
+	ProjectID   string
+	ProjectName string
+	RuntimeID   string
+}
+
+// WatchFunc erzeugt den Beobachter einer Session. fire meldet eine erkannte
+// Rückfrage; der Aufruf kommt aus einer eigenen Goroutine, nie aus Observe.
+type WatchFunc func(meta WatchMeta, fire func(excerpt string)) Watcher
 
 // Frame ist eine Nachricht an einen Subscriber.
 type Frame struct {
@@ -88,6 +118,12 @@ type Session struct {
 	logFile  *os.File
 	logBroke bool
 
+	// watcher erkennt Rückfragen in der Ausgabe; attention hält die zuletzt
+	// erkannte, solange sie unbeantwortet ist.
+	watcher     Watcher
+	attention   string
+	attentionAt *time.Time
+
 	status    store.SessionStatus
 	stopping  bool // vom Nutzer angefordertes Beenden, kein fehlgeschlagener Start
 	exitCode  *int
@@ -114,6 +150,9 @@ type Config struct {
 	BufferBytes int
 	LogPath     string
 	Persist     func(store.Session)
+	// Watch erzeugt den Beobachter für Rückfragen. Nil heißt: keine Erkennung.
+	Watch WatchFunc
+	Meta  WatchMeta
 }
 
 // Start erzeugt das PTY, startet den Prozess und die Owner-Goroutine. Scheitert der
@@ -136,6 +175,13 @@ func Start(cfg Config) *Session {
 		persist:    cfg.Persist,
 	}
 	s.openLog()
+	if cfg.Watch != nil {
+		meta := cfg.Meta
+		if meta.SessionID == "" {
+			meta.SessionID = cfg.ID
+		}
+		s.watcher = cfg.Watch(meta, s.raiseAttention)
+	}
 
 	size := cfg.InitialSize
 	if size.Cols == 0 || size.Rows == 0 {
@@ -200,7 +246,42 @@ func (s *Session) writeOut(chunk []byte) {
 			log.Printf("Session %s: Schreiben ins Log %s fehlgeschlagen, Session läuft weiter: %v", s.id, s.logPath, err)
 		}
 	}
+	if s.watcher != nil {
+		s.watcher.Observe(chunk)
+	}
 	s.broadcast(Frame{Kind: FrameData, Data: chunk})
+}
+
+// raiseAttention hält eine erkannte Rückfrage fest und meldet sie den Clients. Der
+// Aufruf kommt aus der Goroutine des Beobachters, nie aus writeOut.
+func (s *Session) raiseAttention(excerpt string) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != store.StatusRunning {
+		return
+	}
+	s.attention = excerpt
+	s.attentionAt = &now
+	s.broadcast(Frame{Kind: FrameAttention, Message: excerpt})
+}
+
+// clearAttentionLocked nimmt eine offene Rückfrage zurück und meldet das — ein
+// Attention-Frame ohne Message. Muss unter s.mu laufen.
+func (s *Session) clearAttentionLocked() {
+	if s.attention == "" {
+		return
+	}
+	s.attention = ""
+	s.attentionAt = nil
+	s.broadcast(Frame{Kind: FrameAttention})
+}
+
+// Attention liefert die offene Rückfrage, oder eine leere Zeichenkette.
+func (s *Session) Attention() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attention
 }
 
 // broadcast verteilt einen Frame. Ein volllaufender Subscriber wird verworfen und
@@ -259,6 +340,7 @@ func (s *Session) finish(status store.SessionStatus, code *int, msg string) {
 		s.exitCode = code
 		s.errMsg = msg
 		s.endedAt = &now
+		s.clearAttentionLocked()
 		s.broadcast(Frame{Kind: FrameExit, Status: status, ExitCode: code, Message: msg})
 		for id, sub := range s.subs {
 			if !sub.closed {
@@ -272,6 +354,9 @@ func (s *Session) finish(status store.SessionStatus, code *int, msg string) {
 			s.logFile = nil
 		}
 		s.mu.Unlock()
+		if s.watcher != nil {
+			s.watcher.Close()
+		}
 		if s.ptmx != nil {
 			_ = s.ptmx.Close()
 		}
@@ -405,7 +490,16 @@ func (s *Session) Write(p []byte) error {
 	s.mu.Lock()
 	ended := s.status != store.StatusRunning || s.ptmx == nil
 	ptmx := s.ptmx
+	watcher := s.watcher
+	if !ended {
+		// Wer tippt, beantwortet die offene Rückfrage — auch wenn er nur scrollt
+		// oder Ctrl-C schickt. Eine neue Rückfrage meldet sich erneut.
+		s.clearAttentionLocked()
+	}
 	s.mu.Unlock()
+	if !ended && watcher != nil {
+		watcher.Input()
+	}
 	if ended {
 		return ErrSessionEnded
 	}

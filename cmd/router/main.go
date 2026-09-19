@@ -21,6 +21,7 @@ import (
 	"project-router/internal/api"
 	"project-router/internal/auth"
 	"project-router/internal/config"
+	"project-router/internal/notify"
 	"project-router/internal/projects"
 	"project-router/internal/runtime"
 	"project-router/internal/session"
@@ -58,7 +59,16 @@ func run() error {
 	}
 	registry := projects.New(st, cfg.Roots)
 	sessions := session.NewManager(st, registry, catalog, cfg.BufferBytes)
-	authenticator := auth.New(cfg.Token, cfg.BaseURL)
+	// Erkennung von Rückfragen: wartet ein Agent auf eine Entscheidung, meldet der
+	// Router das an die angehängten Browser und an den konfigurierten Webhook.
+	if cfg.Notify.Enabled {
+		notifier, err := notify.New(cfg.Name, cfg.BaseURL, cfg.Notify)
+		if err != nil {
+			return err
+		}
+		sessions.SetWatch(notifier.Watch)
+	}
+	authenticator := auth.New(cfg.AuthToken(), cfg.BaseURL)
 
 	server := api.NewServer(api.Options{
 		Config:   cfg,
@@ -85,12 +95,20 @@ func run() error {
 	httpServer := &http.Server{Handler: r}
 
 	log.SetFlags(log.LstdFlags)
-	fmt.Printf("project-router läuft im Modus %s: http://%s\n", cfg.Mode, ln.Addr())
-	if cfg.Token == "" {
-		fmt.Println("Hinweis: kein Token konfiguriert — die API ist ohne Authentifizierung erreichbar.")
+	fmt.Printf("%s läuft im Modus %s: http://%s\n", cfg.Name, cfg.Mode, ln.Addr())
+	for _, warnung := range cfg.Warnings() {
+		fmt.Fprintln(os.Stderr, "Achtung:", warnung)
 	}
 	fmt.Printf("Erlaubte Roots: %v\n", cfg.Roots)
 	fmt.Printf("Zustand unter: %s\n", cfg.StateDir)
+	switch {
+	case !cfg.Notify.Enabled:
+		fmt.Println("Rückfragen werden nicht gemeldet (notify.enabled: false)")
+	case cfg.Notify.Webhook.Configured():
+		fmt.Printf("Rückfragen nach %s Stille an %s\n", cfg.Notify.IdleAfter, cfg.Notify.Webhook.URL)
+	default:
+		fmt.Printf("Rückfragen nach %s Stille nur in der WebUI — kein notify.webhook konfiguriert\n", cfg.Notify.IdleAfter)
+	}
 
 	errc := make(chan error, 1)
 	go func() {
@@ -105,7 +123,7 @@ func run() error {
 	case err := <-errc:
 		return err
 	case <-stop:
-		fmt.Println("\nproject-router wird beendet, laufende Sessions werden terminiert …")
+		fmt.Printf("\n%s wird beendet, laufende Sessions werden terminiert …\n", cfg.Name)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
